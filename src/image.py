@@ -87,8 +87,9 @@ class NoBoardFound(Exception):
 class SudokuImage:
 
     # TODO: Make this take raw file like data as well
-    def __init__(self, image_file_path, dim=(512, 512)):
-        image = cv2.imread(image_file_path, cv2.IMREAD_COLOR)
+    def __init__(self, image, dim=(512, 512)):
+        if isinstance(image, str):
+            image = cv2.imread(image, cv2.IMREAD_COLOR)
         self.source_image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
         self.grey_image = cv2.cvtColor(self.source_image, cv2.COLOR_BGR2GRAY)
 
@@ -119,11 +120,11 @@ class SudokuImage:
         return aspect_ratio >= 0.95 and aspect_ratio <= 1.05
 
     def find_board(self):
-        image = cv2.GaussianBlur(self.grey_image, (5,5), 0)
+        image = cv2.GaussianBlur(self.grey_image, (7,7), 0)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        image = sharpenImage(image)
         image = cv2.adaptiveThreshold(
             image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 111, 2)
-        image = sharpenImage(image)
         squares = find_squares(image)
 
         squares = [cv2.boundingRect(contour) for contour in squares
@@ -169,8 +170,8 @@ class SudokuImage:
         self.board = ''
         for square in self.distinct_cells:
             x, y, w, h = square
-            ow = int(w / 8)
-            oh = int(h / 8)
+            ow = int(w / 10)
+            oh = int(h / 10)
             x += ow
             w -= 2 * ow
             y += oh
@@ -183,10 +184,10 @@ class SudokuImage:
                 image = cv2.GaussianBlur(image, (3, 3), 0)
                 image = sharpenImage(image)
                 image = thresholding(image)
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                image = cv2.dilate(image, kernel, iterations=1)
-                image = cv2.erode(image, kernel, iterations=1)
                 image = ~image
+                # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                # image = cv2.dilate(image, kernel, iterations=1)
+                # image = cv2.erode(image, kernel, iterations=1)
 
                 # Set the cell image to a format that the model will understand
                 image = cv2.resize(image, (28, 28), interpolation=cv2.INTER_AREA)

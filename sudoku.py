@@ -59,7 +59,6 @@ def solve(ctx, board, output):
             sudoku.find()
             board = sudoku.board
             assert board is not None
-            print(board)
         board = str_to_array(board)
     except TypeError:
         click.secho(f'File {path} does not exist', err=True, fg='red')
@@ -76,6 +75,7 @@ def solve(ctx, board, output):
     try:
         solution = solve_sudoku(board)
     except Exception as err:
+        solution = None
         click.secho(f'Unable to find solution, this usually means the board is incorrect', err=True, fg='red')
 
     if output == 'string':
@@ -84,7 +84,8 @@ def solve(ctx, board, output):
         return
 
     elif is_file and output == 'image':
-        sudoku.board = array_to_str(solution)
+        if solution is not None:
+            sudoku.board = array_to_str(solution)
         sudoku.board_to_image()
         show_image(sudoku.source_image)
 
