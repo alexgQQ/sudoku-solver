@@ -22,20 +22,23 @@ def find_squares(img):
 
     for thrs in range(0, 255, 26):
         if thrs == 0:
-            # bin = cv2.Canny(img, 0, 50, apertureSize=5)
-            bin = cannyEdge(img)
-            bin = cv2.dilate(bin, None)
+            binary = cannyEdge(img)
+            binary = cv2.dilate(binary, None)
         else:
-            _retval, bin = cv2.threshold(img, thrs, 255, cv2.THRESH_BINARY)
-        contours, _hierarchy = cv2.findContours(bin, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            cnt_len = cv2.arcLength(cnt, True)
-            cnt = cv2.approxPolyDP(cnt, 0.02*cnt_len, True)
-            if len(cnt) == 4 and cv2.contourArea(cnt) > 1000 and cv2.isContourConvex(cnt):
-                cnt = cnt.reshape(-1, 2)
-                max_cos = np.max([angle_cos( cnt[i], cnt[(i+1) % 4], cnt[(i+2) % 4] ) for i in range(4)])
+            _, binary = cv2.threshold(img, thrs, 255, cv2.THRESH_BINARY)
+
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            contour_len = cv2.arcLength(contour, True)
+            contour = cv2.approxPolyDP(contour, 0.02 * contour_len, True)
+
+            if len(contour) == 4 and cv2.contourArea(contour) > 1000 and cv2.isContourConvex(contour):
+                contour = contour.reshape(-1, 2)
+                max_cos = np.max(
+                    [angle_cos( contour[i], contour[(i + 1) % 4], contour[(i + 2) % 4] ) for i in range(4)]
+                )
                 if max_cos < 0.1:
-                    squares.append(cnt)
+                    squares.append(contour)
     
     return squares
 
@@ -80,72 +83,84 @@ def sharpenImage(image):
     return cv2.filter2D(image, -1, kernel)
 
 
-class NoBoardFound(Exception):
-    pass
-
-
 class SudokuImage:
 
     # TODO: Make this take raw file like data as well
     def __init__(self, image, dim=(512, 512)):
         if isinstance(image, str):
+            self.image_path = image
             image = cv2.imread(image, cv2.IMREAD_COLOR)
         self.source_image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-        self.grey_image = cv2.cvtColor(self.source_image, cv2.COLOR_BGR2GRAY)
+        self.image = cv2.cvtColor(self.source_image, cv2.COLOR_BGR2GRAY)
+        self.image = cv2.GaussianBlur(self.image, (7, 7), 0)
+        # self.image = cv2.bilateralFilter(self.image, 5, 75, 75)
+        self.image = sharpenImage(self.image)
 
     def find(self):
-        try:
-            self.find_board()
-            self.find_cells()
-            assert len(self.distinct_cells) == 81
+        self.find_board()
+        self.find_cells()
+        if len(self.distinct_cells) == 81:
             self.order_cells()
             self.identify_cells()
-        except (NoBoardFound, AssertionError) as err:
-            self.board = None
 
-    @property
-    def max_cell_area(self):
+    @staticmethod
+    def max_cell_area(image):
         """ Maximum possible size of a sudoku cell for the image """
-        height, width = self.grey_image.shape
+        height, width = image.shape
         approx_height = height // 9
         approx_width = width // 9
         return approx_height * approx_width
 
     @staticmethod
-    def is_contour_square(contour):
+    def is_contour_square(cnt):
         # a square will have an aspect ratio that is approximately
         # equal to one, otherwise, the shape is a rectangle
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / float(h)
-        return aspect_ratio >= 0.95 and aspect_ratio <= 1.05
+        cnt_len = cv2.arcLength(cnt, True)
+        cnt = cv2.approxPolyDP(cnt, 0.02*cnt_len, True)
+        if len(cnt) == 4 and cv2.contourArea(cnt) > 1000 and cv2.isContourConvex(cnt):
+            cnt = cnt.reshape(-1, 2)
+            max_cos = np.max([angle_cos( cnt[i], cnt[(i+1) % 4], cnt[(i+2) % 4] ) for i in range(4)])
+            if max_cos < 0.1:
+                return True
+        return False
 
     def find_board(self):
-        image = cv2.GaussianBlur(self.grey_image, (7,7), 0)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        image = sharpenImage(image)
+        """ 
+        Attempt to find the largest square blob in an image
+        and assume it to be the sudoku board
+        """
         image = cv2.adaptiveThreshold(
-            image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 111, 2)
+            self.image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 151, 4
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=1)
+        w, h = image.shape
         squares = find_squares(image)
 
         squares = [cv2.boundingRect(contour) for contour in squares
-                   if cv2.contourArea(contour) > self.max_cell_area and self.is_contour_square(contour)]
-        squares = sorted(squares, key=lambda obj: obj[2] * obj[3])
+                   if cv2.contourArea(contour) > self.max_cell_area(image)
+                   and cv2.contourArea(contour) < w * h]
+        squares = sorted(squares, key=lambda obj: obj[2] * obj[3], reverse=True)
 
-        try:
+        if not squares:
+            self.board = None
+            return
+        elif len(squares) == 1:
             board = squares[0]
-            x, y, w, h = board
-        except IndexError:
-            raise NoBoardFound()
+        else:
+            board = squares[-1]
+
+        x, y, w, h = board
 
         self.board_offset = (x, y)
-        self.sudoku_board = image[y:y+h, x:x+w]
-        self.grey_board = self.grey_image[y:y+h, x:x+w]
+        self.board = image[y:y+h, x:x+w]
+        self.grey_board = self.image[y:y+h, x:x+w]
 
     def find_cells(self):
-        squares = find_squares(self.sudoku_board)
+        squares = find_squares(self.board)
         squares = [
             cv2.boundingRect(contour) for contour in squares
-            if cv2.contourArea(contour) < self.max_cell_area
+            if cv2.contourArea(contour) < self.max_cell_area(self.board)
         ]
 
         self.distinct_cells = []
@@ -167,7 +182,7 @@ class SudokuImage:
     def identify_cells(self):
         # Load trained MNIST model for guessing digits
         model = load_model('digits_model.h5')
-        self.board = ''
+        self.numbers = ''
         for square in self.distinct_cells:
             x, y, w, h = square
             ow = int(w / 10)
@@ -178,7 +193,7 @@ class SudokuImage:
             h -= 2 * oh
 
             # Preprocess each cell image for number detection
-            cell_image = self.sudoku_board[y:y + h, x:x + w]
+            cell_image = self.board[y:y + h, x:x + w]
             image = self.grey_board[y:y + h, x:x + w]
             if np.mean(cell_image) < 250:
                 image = cv2.GaussianBlur(image, (3, 3), 0)
@@ -196,13 +211,13 @@ class SudokuImage:
                 image /= 255
 
                 prediction = model.predict(image)
-                self.board += str(prediction.argmax())
+                self.numbers += str(prediction.argmax())
             else:
-                self.board += '0'
+                self.numbers += '0'
 
     def board_to_image(self):
         xo, yo = self.board_offset
-        for square, value in zip(self.distinct_cells, self.board):
+        for square, value in zip(self.distinct_cells, self.numbers):
             x, y, w, h = square
             y += yo
             x += xo

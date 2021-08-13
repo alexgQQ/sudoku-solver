@@ -127,46 +127,65 @@ def test(ctx, component):
     if component in ('images', 'all'):
 
         image_paths = glob.glob('images/*.jpg')
-        dim = (512, 512)
 
         # Data structs to track testing data
         guesses = defaultdict(int)
         truths = defaultdict(int)
+
         total_images = 0
         boards_found = []
         total_guesses = 0
         wrong_guesses = 0
         total_correct = 0
 
+        found_boards = []
         for image_path in image_paths:
             total_images += 1
+            image = SudokuImage(image_path)
+            image.find_board()
 
-            # Open the associated data file and put the values into a single ordered string
             data_file_path = image_path.replace('.jpg', '.dat')
             with open(data_file_path, 'r') as fp:
                 lines = fp.readlines()
             valid = ''.join([line.replace(' ', '').replace('\n', '') for line in lines[2:]])
 
-            sudoku = SudokuImage(image_path)
-            sudoku.find()
-            if sudoku.board:
-                valid_arr = str_to_array(valid).flatten()
-                guess_arr = str_to_array(sudoku.board).flatten()
-                boards_found.append(
-                    (image_path, np.linalg.norm(valid_arr - guess_arr))
-                )
+            if image.board is not None:
+                found_boards.append((image, valid))
 
-                if sudoku.board == valid:
-                    total_correct += 1
+        click.secho(f'Total Images: {total_images}')
+        click.secho(f'Large Squares Found: {len(found_boards)}')
 
-                # See how many of the guesses were incorrect
-                for guess, truth in zip(sudoku.board, valid):
-                    if truth != '0':
-                        total_guesses += 1
-                    if truth != guess:
-                        wrong_guesses += 1
-                        truths[truth] += 1
-                        guesses[guess] += 1
+        full_boards = []
+        for sudoku, valid in found_boards:
+            sudoku.find_cells()
+            if len(sudoku.distinct_cells) == 81:
+                sudoku.order_cells()
+                full_boards.append((sudoku, valid))
+
+        click.secho(f'All Cells Found: {len(full_boards)}')
+
+        correct = []
+        boards_found = []
+        for sudoku, valid in full_boards:
+            sudoku.identify_cells()
+
+            valid_arr = str_to_array(valid).flatten()
+            guess_arr = str_to_array(sudoku.numbers).flatten()
+            boards_found.append(
+                (sudoku.image_path, np.linalg.norm(valid_arr - guess_arr))
+            )
+
+            if sudoku.numbers == valid:
+                total_correct += 1
+
+            # See how many of the guesses were incorrect
+            for guess, truth in zip(sudoku.numbers, valid):
+                if truth != '0':
+                    total_guesses += 1
+                if truth != guess:
+                    wrong_guesses += 1
+                    truths[truth] += 1
+                    guesses[guess] += 1
 
         # Calculate the percentage of each digit that was wrong
         for key, val in truths.items():
@@ -176,12 +195,10 @@ def test(ctx, component):
             guesses[key] = val / wrong_guesses
 
 
-        click.secho(f'Total Images: {total_images}')
-        click.secho(f'Squares Found: {len(boards_found)}')
         click.secho(f'- {sorted(boards_found, key=lambda x: x[1])}')
         click.secho(f'Total Guesses: {total_guesses}')
+        click.secho(f'Total Correct: {total_correct}')
         click.secho(f'% Wrong Guesses: {wrong_guesses/total_guesses}')
-        click.secho(f'Correctly Identified: {total_correct}')
         click.secho(f'% Truths Wrong: {truths}')
         click.secho(f'% Guesses Wrong: {guesses}')
 
